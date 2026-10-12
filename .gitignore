@@ -1,0 +1,6 @@
+.DS_Store
+Thumbs.db
+*.swp
+# 用户自行导入的题库文件不要提交到本仓库
+my-questionnaires/
+*.private.json
