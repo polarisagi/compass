@@ -86,3 +86,34 @@ td.n{font-family:var(--f-mono);text-align:right;font-variant-numeric:tabular-num
 .prose p,.prose li{max-width:68ch}
 @media (max-width:440px){.scale{margin-left:0}.bar-row{grid-template-columns:6em 1fr 3em}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+/* 三条建议 */
+.advice{margin:10px 0 0;padding:0;list-style:none;counter-reset:adv;display:grid;gap:10px}
+.advice li{counter-increment:adv;position:relative;padding:12px 14px 12px 46px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:var(--surface)}
+.advice li::before{content:counter(adv);position:absolute;left:14px;top:11px;font-family:var(--f-mono);font-size:15px;color:var(--accent)}
+.advice b{font-size:16px;display:block}
+.advice p{margin:4px 0 6px;max-width:65ch}
+.advice small{color:var(--muted);font-size:12px}
+/* 雷达图 */
+.radar-box{display:flex;justify-content:center;margin:6px 0 4px}
+.radar{width:min(100%,400px);height:auto}
+.radar .ring{fill:none;stroke:var(--line);stroke-width:1}
+.radar .self{fill:var(--accent);fill-opacity:.18;stroke:var(--accent);stroke-width:2}
+.radar .other{fill:none;stroke:var(--other);stroke-width:2;stroke-dasharray:5 4}
+.radar .dot{fill:var(--accent)}
+.radar text{fill:var(--ink);font-size:12px;font-family:var(--f-body)}
+/* 作者入口 */
+.author{margin-top:36px;padding-top:6px;border-top:1px solid var(--line)}
+.links{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:4px}
+a{color:var(--accent)}
+a.btn{text-decoration:none;display:inline-block}
+.foot a{color:inherit}
+/* 打印：只留报告内容 */
+@media print{
+  :root{--bg:#fff;--surface:#fff;--ink:#000;--muted:#444;--line:#ccc;--accent:#1f5f74;--accent-soft:#eef5f7;--other:#8a6a1f;color-scheme:light}
+  .top,.foot,.btns,.no-print,textarea,input,label.f,select{display:none!important}
+  body{font-size:12pt}
+  .wrap{max-width:none;padding:0}
+  h2{break-after:avoid}
+  .advice li,.bar-row,.radar-box,table{break-inside:avoid}
+  .track,.track i,.track .mark,.advice li{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}

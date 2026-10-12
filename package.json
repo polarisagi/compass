@@ -1,0 +1,12 @@
+{
+  "name": "polaris-compass",
+  "private": true,
+  "type": "module",
+  "description": "北极星画像：开源、免费、不收集数据的职业与性格自我了解工具",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test",
+    "serve": "python3 -m http.server 8000",
+    "deploy": "sh scripts/deploy.sh"
+  }
+}

@@ -2,8 +2,10 @@
 // 所有数据只保存在浏览器的 localStorage 里，没有任何网络请求。
 import { IPIP50, ONET, MOOD, INTERVIEW, PENDING } from "./instruments.js";
 import { NEO120, NEO_FACETS, NEO_DOMAINS, NEO_DOMAIN_NOTES, ACTION, ACTION_SCALES, WIL, WIL_VALUES } from "./deep.js";
-import { scoreIPIP, scoreONET, scoreMood, scoreNEO, scoreAction, scoreWIL, encodeObserver, decodeObserver, observerAnswers } from "./scoring.js";
+import { scoreONET, scoreMood, scoreNEO, scoreAction, scoreWIL, encodeObserver, decodeObserver } from "./scoring.js";
 import { validateCustom, scoreCustom } from "./custom.js";
+import { computeResults, reportMarkdown, radarGeometry } from "./report.js";
+import { SITE } from "./config.js";
 
 const KEY = "polaris-compass-v1";
 const blank = () => ({ consent: false, ans: {}, observers: [], custom: [] });
@@ -56,22 +58,35 @@ function modules() {
 const answered = m => Object.values(ans(m.id)).filter(v => v !== "" && v != null).length;
 
 // ---------- 路由 ----------
-let view = "home";
-function go(v, arg) {
-  view = v;
+// 地址栏用 #report、#module/onet、#observe?for=小王 这样的形式，可以前进后退，也可以直接分享
+const VIEWS = { home: () => renderHome, module: () => renderModule, report: () => renderReport, observe: () => renderObserve, about: () => renderAbout, data: () => renderData };
+let view = "home", viewArg;
+const hashOf = (v, arg) => v === "home" ? "#" : "#" + v + (arg == null ? "" : v === "observe" ? (arg ? "?for=" + encodeURIComponent(arg) : "") : "/" + encodeURIComponent(arg));
+function parseHash() {
+  const h = decodeURIComponentSafe(location.hash.slice(1));
+  const m = h.match(/^([a-z]+)(?:\/(.+)|\?for=(.*))?$/);
+  if (!m || !VIEWS[m[1]]) return ["home"];
+  return [m[1], m[2] ?? m[3]];
+}
+function decodeURIComponentSafe(s) { try { return decodeURIComponent(s); } catch { return s; } }
+function go(v, arg, { push = true } = {}) {
+  if (v === "module" && !modules().some(m => m.id === arg)) { v = "home"; arg = undefined; }
+  view = v; viewArg = arg;
+  if (push) { const h = hashOf(v, arg); if (location.hash !== h && !(h === "#" && !location.hash)) try { history.pushState(null, "", h === "#" ? location.pathname + location.search : h); } catch { /* 预览环境里可能不允许改地址栏 */ } }
   document.querySelectorAll(".nav button").forEach(b => b.classList.toggle("on", b.dataset.go === v));
   main.replaceChildren();
   if (!S.consent && v !== "about") return renderConsent();
-  ({ home: renderHome, module: renderModule, report: renderReport, observe: renderObserve, about: renderAbout, data: renderData })[v](arg);
+  VIEWS[v]()(arg);
   window.scrollTo(0, 0); main.focus({ preventScroll: true });
 }
 document.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
 document.getElementById("home").onclick = () => go("home");
+window.addEventListener("popstate", () => { const [v, a] = parseHash(); go(v, a, { push: false }); });
 
 // ---------- 同意页 ----------
 function renderConsent() {
   const box = el("input", { type: "checkbox", id: "agree" });
-  const btn = el("button", { class: "btn", type: "button", disabled: true, onclick: () => { S.consent = true; save(); go(view === "about" ? "about" : view); } }, "开始");
+  const btn = el("button", { class: "btn", type: "button", disabled: true, onclick: () => { S.consent = true; save(); go(view, viewArg, { push: false }); } }, "开始");
   box.onchange = () => { btn.disabled = !box.checked; };
   main.append(
     el("h1", {}, "开始之前"),
@@ -87,7 +102,7 @@ function renderConsent() {
     el("div", { class: "btns" }, btn, el("button", { class: "btn ghost", type: "button", onclick: () => renderAboutInline() }, "查看完整声明"))
   );
 }
-function renderAboutInline() { main.replaceChildren(); renderAbout(true); }
+function renderAboutInline() { main.replaceChildren(); renderAbout(true); window.scrollTo(0, 0); }
 
 // ---------- 首页 ----------
 function renderHome() {
@@ -194,37 +209,53 @@ function barRows(entries, max, min = 1) {
   return box;
 }
 function renderReport() {
+  const R = computeResults(S);
   main.append(el("h1", {}, "我的报告"), el("p", { class: "lead" }, "下面的分数适合用来看你自己各项之间的相对高低。中文版没有经过常模校准，不要把它当成和别人比较的排名。"));
+  // 三条建议
+  main.append(el("h2", {}, "三条建议"), el("p", { class: "src" }, "根据你已完成的部分，由固定规则生成（不是人工智能，也不是专业建议）。做完的部分越多，建议越具体。"));
+  const ol = el("ol", { class: "advice" });
+  for (const a of R.advice) ol.append(el("li", {}, el("b", {}, a.title), el("p", {}, a.body), el("small", {}, "依据：" + a.basis)));
+  main.append(ol);
   // 大五人格
-  const ip = scoreIPIP(ans("ipip50"));
-  const obs = S.observers.map(p => scoreIPIP(observerAnswers(p)));
-  const obsMean = d => obs.length ? Math.round(obs.reduce((s, o) => s + o[d], 0) / obs.length * 100) / 100 : null;
+  const ip = R.ipip, obs = R.obs;
   main.append(el("h2", {}, "大五人格"), el("p", { class: "src" }, IPIP50.source));
   if (Object.values(ip).every(v => v == null)) main.append(el("p", { class: "msg" }, "还没有完成这一部分。"));
   else {
-    main.append(barRows(Object.entries(IPIP50.domains).map(([d, n]) => ({ label: n, value: ip[d], other: obsMean(d), note: IPIP50.domainNotes[d] })), 5));
-    main.append(el("div", { class: "key" }, el("span", {}, "你的自评"), obs.length ? el("span", { class: "o" }, `${obs.length} 位朋友的评价均值`) : null, el("span", { style: "opacity:.8" }, "中线 = 3 分")));
-    if (obs.length) {
-      const gaps = Object.entries(IPIP50.domains).map(([d, n]) => [n, ip[d] != null ? Math.round((obsMean(d) - ip[d]) * 100) / 100 : null]).filter(x => x[1] != null).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-      if (gaps.length && Math.abs(gaps[0][1]) >= 0.5) main.append(el("div", { class: "note" }, `你和朋友看法差得最多的是「${gaps[0][0]}」：朋友眼中的你比你的自评${gaps[0][1] > 0 ? "高" : "低"} ${Math.abs(gaps[0][1])} 分。差距在 0.5 分以上就值得想一想，问问他们为什么这样看你。`));
-    }
+    const doms = Object.keys(IPIP50.domains);
+    if (doms.every(d => ip[d] != null)) main.append(radar(doms.map(d => IPIP50.domains[d]), doms.map(d => ip[d]), obs ? doms.map(d => obs[d]) : null));
+    main.append(barRows(doms.map(d => ({ label: IPIP50.domains[d], value: ip[d], other: obs?.[d], note: IPIP50.domainNotes[d] })), 5));
+    main.append(el("div", { class: "key" }, el("span", {}, "你的自评"), obs ? el("span", { class: "o" }, `${R.obsCount} 位朋友的评价均值`) : null, el("span", { style: "opacity:.8" }, "中线 = 3 分")));
   }
   // 朋友评价
   main.append(el("h3", {}, "朋友的评价"));
+  main.append(el("p", { class: "lead no-print" }, "把邀请链接发给 3 位以上了解你的人（同事、上级、老朋友都可以）。他们在自己的手机上作答，答完会得到一段结果码，发回给你，粘贴到下面就能看到对比。全程不经过任何服务器。"));
+  const forName = el("input", { type: "text", id: "inv-nm", maxlength: 20, autocomplete: "off", placeholder: "例如：老李" });
+  forName.value = S.me || "";
+  const invMsg = el("div", { class: "msg" });
+  main.append(el("label", { class: "f", for: "inv-nm" }, "你的称呼（朋友打开链接时会看到「正在评价：……」，选填）"), forName,
+    el("div", { class: "btns" }, el("button", { class: "btn", type: "button", onclick: async () => {
+      S.me = forName.value.trim().slice(0, 20); save();
+      const base = /^https?:$/.test(location.protocol) && !/claude|usercontent/.test(location.host) ? location.origin + location.pathname : SITE.url + "/";
+      const link = base + hashOf("observe", S.me);
+      const text = `想请你花 6 分钟评价一下我，打开这个链接就行：\n${link}\n答完会生成一段结果码，复制发回给我。你的作答不会上传，谢谢！`;
+      try { await navigator.clipboard.writeText(text); invMsg.className = "msg"; invMsg.textContent = "已复制邀请语和链接，粘贴到微信发给朋友就可以了。"; }
+      catch { invMsg.className = "msg"; invMsg.replaceChildren("自动复制没有成功，请手动复制：", el("textarea", { class: "code", readonly: true }, text)); }
+    } }, "复制邀请链接")), invMsg);
   const codeBox = el("textarea", { class: "code", id: "obs-code", placeholder: "把朋友发来的结果码粘贴到这里（以 CMP1: 开头），可以一次粘贴多段" });
   const msg = el("div", { class: "msg" });
-  main.append(el("p", { class: "lead" }, "让了解你的人打开本工具的「评价朋友」页，答完后把结果码发给你。至少收集 3 份，结果会更可靠。"), codeBox, msg,
+  main.append(el("label", { class: "f", for: "obs-code" }, "收到的结果码"), codeBox, msg,
     el("div", { class: "btns" }, el("button", { class: "btn ghost", type: "button", onclick: () => {
       const found = codeBox.value.match(/CMP1:[A-Za-z0-9+/=]+/g) || [];
       let ok = 0, bad = 0;
       for (const c of found) { try { const p = decodeObserver(c); if (!S.observers.some(o => o.a === p.a && o.t === p.t && o.nm === p.nm)) { S.observers.push(p); ok++; } } catch { bad++; } }
       save(); msg.className = "msg" + (bad || !found.length ? " warn" : ""); msg.textContent = found.length ? `添加了 ${ok} 份${bad ? `，有 ${bad} 段结果码无法识别` : ""}。` : "没有找到结果码。";
-      if (ok) setTimeout(() => go("report"), 600);
+      if (ok) setTimeout(() => go("report", undefined, { push: false }), 600);
     } }, "添加朋友的评价")));
   if (S.observers.length) {
+    if (S.observers.length < 3) main.append(el("div", { class: "note" }, `已经收到 ${S.observers.length} 份评价。至少 3 份，对比才比较可靠。`));
     const t = el("table", {}, el("tr", {}, el("th", {}, "评价人"), el("th", {}, "关系"), el("th", {}, "TA 说你最擅长"), el("th", {}, "TA 说你最该改"), el("th", {})));
     S.observers.forEach((p, i) => t.append(el("tr", {}, el("td", {}, p.nm || "匿名"), el("td", {}, p.rel || ""), el("td", {}, p.o?.[0] || ""), el("td", {}, p.o?.[1] || ""),
-      el("td", {}, el("button", { class: "btn ghost", type: "button", onclick: () => { S.observers.splice(i, 1); save(); go("report"); } }, "删除")))));
+      el("td", {}, el("button", { class: "btn ghost", type: "button", onclick: () => { S.observers.splice(i, 1); save(); go("report", undefined, { push: false }); } }, "删除")))));
     main.append(el("div", { class: "tbl" }, t));
   }
   // 深度版
@@ -280,18 +311,47 @@ function renderReport() {
   // 自我访谈
   const iv = ans("interview");
   if (Object.values(iv).some(Boolean)) main.append(el("h2", {}, "自我访谈"), el("p", { class: "lead" }, "你写下的内容已经保存在本机。可以到「导入、导出与备份」页导出成文本，拿给信任的人看，或者以后对照着重读。"));
-  main.append(el("div", { class: "btns" }, el("button", { class: "btn ghost", type: "button", onclick: () => go("data") }, "导出我的结果")));
+  main.append(el("h2", {}, "保存这份报告"), el("p", { class: "lead" }, "报告只在这个浏览器里。可以导出成 Markdown 文本，或者用浏览器的打印功能存成 PDF。导出的报告不含情绪状态部分。"),
+    el("div", { class: "btns no-print" },
+      el("button", { class: "btn", type: "button", onclick: () => download(`北极星画像-报告-${today()}.md`, reportMarkdown(S), "text/markdown") }, "导出报告（Markdown）"),
+      el("button", { class: "btn ghost", type: "button", onclick: () => window.print() }, "打印 / 存为 PDF"),
+      el("button", { class: "btn ghost", type: "button", onclick: () => go("data") }, "备份全部数据")));
+  main.append(authorBox());
+}
+
+// 大五人格雷达图：自评（实线）和朋友评价均值（虚线）
+function radar(labels, self, other) {
+  const NS = "http://www.w3.org/2000/svg", g = radarGeometry(self), go2 = other ? radarGeometry(other) : null;
+  const s = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text != null) e.textContent = text; return e; };
+  const pts = a => a.map(p => p.join(",")).join(" ");
+  const svg = s("svg", { viewBox: "-56 -6 412 312", class: "radar", role: "img", "aria-label": "大五人格雷达图：" + labels.map((l, i) => `${l} ${self[i]}`).join("，") });
+  g.rings.forEach(r => svg.append(s("polygon", { points: pts(r), class: "ring" })));
+  g.axis.forEach(p => svg.append(s("line", { x1: g.center, y1: g.center, x2: p[0], y2: p[1], class: "ring" })));
+  if (go2?.poly) svg.append(s("polygon", { points: pts(go2.poly), class: "other" }));
+  svg.append(s("polygon", { points: pts(g.poly), class: "self" }));
+  g.poly.forEach(p => svg.append(s("circle", { cx: p[0], cy: p[1], r: 3, class: "dot" })));
+  g.label.forEach((p, i) => svg.append(s("text", { x: p[0], y: p[1] + 4, "text-anchor": Math.abs(p[0] - g.center) < 8 ? "middle" : p[0] > g.center ? "start" : "end" }, labels[i])));
+  return el("div", { class: "radar-box" }, svg);
+}
+const today = () => new Date().toISOString().slice(0, 10);
+
+// 作者和项目入口（内容在 js/config.js）
+function authorBox() {
+  const links = SITE.author.links.filter(l => l.url || l.text);
+  return el("div", { class: "author no-print" }, el("h2", {}, "关于作者"), el("p", { class: "lead" }, SITE.author.intro),
+    el("ul", { class: "links" }, ...links.map(l => el("li", {}, el("b", {}, l.label + "："), l.url ? el("a", { href: l.url, target: l.url.startsWith("mailto:") ? null : "_blank", rel: "noopener" }, l.text || l.url.replace(/^https?:\/\/|^mailto:/g, "")) : l.text))));
 }
 
 // ---------- 评价朋友 ----------
-function renderObserve() {
+function renderObserve(forName) {
   const a = {};
-  main.append(el("h1", {}, "评价一位朋友"),
+  forName = String(forName || "").replace(/[<>]/g, "").slice(0, 20);
+  main.append(el("h1", {}, forName ? `评价：${forName}` : "评价一位朋友"),
     el("p", { class: "lead" }, "你的朋友想知道别人眼中的 TA 是什么样的。请按你对 TA 平时的真实印象作答，直率的评价最有用。大约 6 分钟。"),
     el("div", { class: "note" }, "你的作答不会上传。答完后，页面会生成一段结果码，复制后发给你的朋友就行。结果码里不包含你的任何联系方式。"));
   const rel = el("select", { id: "ob-rel" }, ...["", "同事", "上级", "朋友", "同学", "家人", "伴侣", "其他"].map(x => el("option", { value: x }, x || "请选择")));
   const nm = el("input", { type: "text", id: "ob-nm", maxlength: 20, autocomplete: "off" });
-  main.append(el("label", { class: "f", for: "ob-rel" }, "你和 TA 的关系"), rel, el("label", { class: "f", for: "ob-nm" }, "你的称呼（选填，方便 TA 知道是谁）"), nm,
+  main.append(el("label", { class: "f", for: "ob-rel" }, "你和 TA 的关系"), rel, el("label", { class: "f", for: "ob-nm" }, `你的称呼（选填，方便${forName ? " " + forName + " " : " TA "}知道是谁）`), nm,
     el("h2", {}, "TA 是一个怎样的人"), el("p", { class: "lead" }, IPIP50.observerIntro));
   const frag = document.createDocumentFragment();
   const lg = el("div", { class: "legend" }); IPIP50.labels.forEach((l, i) => lg.append(el("span", {}, el("b", {}, i + 1), l))); frag.append(lg);
@@ -316,7 +376,7 @@ function renderObserve() {
       if (!rel.value) { msg.className = "msg warn"; msg.textContent = "请先选择你和 TA 的关系。"; return; }
       if (miss.length) { msg.className = "msg warn"; msg.textContent = `还有 ${miss.length} 题没答：${miss.slice(0, 12).join("、")}${miss.length > 12 ? "……" : ""}`; return; }
       out.value = encodeObserver({ rel: rel.value, nm: nm.value.trim(), a: IPIP50.items.map((_, i) => a[i + 1]).join(""), o: [o1.value.trim(), o2.value.trim()], t: new Date().toISOString().slice(0, 10) });
-      out.hidden = false; copy.hidden = false; msg.className = "msg"; msg.textContent = "把这段结果码完整复制，发给你的朋友。";
+      out.hidden = false; copy.hidden = false; msg.className = "msg"; msg.textContent = `把这段结果码完整复制，发给${forName || "你的朋友"}。`; out.scrollIntoView({ block: "center" });
     } }, "生成结果码"), copy), out, msg);
 }
 
@@ -330,18 +390,22 @@ function interviewText() {
   return s;
 }
 function renderData() {
-  const msg = el("div", { class: "msg" });
+  const msg = el("div", { class: "msg" }), withMood = el("input", { type: "checkbox" });
   const fileIn = (accept, onload) => { const f = el("input", { type: "file", accept, hidden: true, onchange: e => { const file = e.target.files[0]; if (!file) return; const r = new FileReader(); r.onload = () => onload(String(r.result)); r.readAsText(file); } }); document.body.append(f); f.click(); setTimeout(() => f.remove(), 60000); };
   main.append(el("h1", {}, "导入、导出与备份"),
     el("p", { class: "lead" }, "你的作答只保存在这个浏览器里。换电脑、清除浏览器数据之前，请先导出备份。"),
     el("h2", {}, "备份"),
     el("div", { class: "btns" },
       el("button", { class: "btn", type: "button", onclick: () => download("北极星画像-备份.json", JSON.stringify(S, null, 1), "application/json") }, "导出全部数据（JSON）"),
+      el("button", { class: "btn ghost", type: "button", onclick: () => download(`北极星画像-报告-${today()}.md`, reportMarkdown(S, { includeMood: withMood.checked }), "text/markdown") }, "导出报告（Markdown）"),
       el("button", { class: "btn ghost", type: "button", onclick: () => download("北极星画像-自我访谈.md", interviewText(), "text/markdown") }, "导出自我访谈（文本）"),
       el("button", { class: "btn ghost", type: "button", onclick: () => fileIn(".json,application/json", t => {
-        try { const s = JSON.parse(t); if (!s || typeof s.ans !== "object") throw 0; S = { ...blank(), ...s, consent: true }; save(); msg.className = "msg"; msg.textContent = "已恢复备份。"; }
+        try { const s = JSON.parse(t); if (!s || typeof s.ans !== "object" || Array.isArray(s.ans)) throw 0;
+          S = { ...blank(), ans: s.ans, observers: Array.isArray(s.observers) ? s.observers : [], custom: Array.isArray(s.custom) ? s.custom.flatMap(c => { try { return [validateCustom(c)]; } catch { return []; } }) : [], me: typeof s.me === "string" ? s.me.slice(0, 20) : "", consent: true };
+          save(); go("data", undefined, { push: false }); const m = main.querySelector(".msg:last-child") || msg; m.className = "msg"; m.textContent = "已恢复备份。"; }
         catch { msg.className = "msg warn"; msg.textContent = "这个文件不是有效的备份。"; }
       }) }, "从备份恢复")),
+    el("label", { class: "check" }, withMood, el("span", {}, "导出的报告里包含「情绪状态」部分（默认不包含，分享报告前请慎重）")),
     el("h2", {}, "导入你自己的题库"),
     html(`<div class="prose"><p>本工具只内置可以公开发布的题目。如果你<b>已经通过合法途径取得了</b>某个量表（例如从原作者的官网下载），可以按 <code>docs/题库格式.md</code> 的格式整理成 JSON 文件，在这里导入。题库文件只保存在你自己的浏览器里，不会上传，也不会出现在本项目中。</p>
     <p><b>导入即表示你确认：</b>你有权在个人范围内使用这些题目，并自行遵守原作者的使用条款；本项目不提供、不审核、也不分发任何导入的内容。请不要把含有受版权保护题目的题库文件公开传播。</p></div>`),
@@ -364,7 +428,10 @@ function renderAbout(fromConsent) {
   const t = el("table", {}, el("tr", {}, el("th", {}, "量表"), el("th", {}, "作者"), el("th", {}, "状态"), el("th", {}, "本工具里的替代")));
   PENDING.forEach(([n, a, st, alt]) => t.append(el("tr", {}, el("td", {}, n), el("td", {}, a), el("td", {}, st), el("td", {}, alt))));
   main.append(el("h2", {}, "未收录的量表"), el("p", { class: "lead" }, "下面这些量表质量很好，但原作者没有允许公开分发，所以本项目不收录，而是用公有领域的同类量表替代。我们也在联系作者申请授权。"), el("div", { class: "tbl" }, t));
-  if (fromConsent === true) main.append(el("div", { class: "btns" }, el("button", { class: "btn", type: "button", onclick: () => go("home") }, "返回")));
+  main.append(el("h2", {}, "开源与反馈"), el("p", { class: "lead" }, "代码、题目来源和更新记录都在 GitHub 上。发现翻译不准、计分有误，或者有改进建议，欢迎提交 issue。"),
+    el("div", { class: "btns" }, el("a", { class: "btn ghost", href: SITE.repo, target: "_blank", rel: "noopener" }, "GitHub 仓库"), el("a", { class: "btn ghost", href: SITE.issues, target: "_blank", rel: "noopener" }, "提交反馈")));
+  main.append(authorBox());
+  if (fromConsent === true) main.append(el("div", { class: "btns" }, el("button", { class: "btn", type: "button", onclick: () => go(view, viewArg, { push: false }) }, "返回")));
 }
 const ABOUT = `<div class="prose">
 <h2>这是什么</h2>
@@ -400,4 +467,4 @@ const ABOUT = `<div class="prose">
 <p>本工具按「现状」提供，不对结果的准确性、适用性作任何保证。使用本工具以及依据结果做出的任何决定，由使用者自己负责。如果你是某个量表的权利人，认为本项目的使用有不当之处，请在项目仓库提交 issue，我们会及时处理。</p>
 </div>`;
 
-go("home");
+{ const [v, a] = parseHash(); go(v, a, { push: false }); }
