@@ -1,7 +1,8 @@
 // 北极星画像 · 页面逻辑
 // 所有数据只保存在浏览器的 localStorage 里，没有任何网络请求。
-import { IPIP50, ONET, WORKVALUES, MOOD, INTERVIEW, PENDING } from "./instruments.js";
-import { scoreIPIP, scoreONET, scoreValues, scoreMood, encodeObserver, decodeObserver, observerAnswers } from "./scoring.js";
+import { IPIP50, ONET, MOOD, INTERVIEW, PENDING } from "./instruments.js";
+import { NEO120, NEO_FACETS, NEO_DOMAINS, NEO_DOMAIN_NOTES, ACTION, ACTION_SCALES, WIL, WIL_VALUES } from "./deep.js";
+import { scoreIPIP, scoreONET, scoreMood, scoreNEO, scoreAction, scoreWIL, encodeObserver, decodeObserver, observerAnswers } from "./scoring.js";
 import { validateCustom, scoreCustom } from "./custom.js";
 
 const KEY = "polaris-compass-v1";
@@ -26,16 +27,26 @@ const el = (tag, attrs = {}, ...kids) => {
 const html = s => { const t = document.createElement("template"); t.innerHTML = s; return t.content; };
 
 // ---------- 模块注册 ----------
+const NEO_DEF = { id: "neo120", name: "大五人格 · 深度版", min: 1, max: 5, labels: IPIP50.labels,
+  source: "IPIP-NEO-120（Johnson, 2014；International Personality Item Pool）", license: "公有领域，可以用于任何目的",
+  intro: "共 116 题，测 5 个维度、29 个分面，比快速版细得多。请按你平时一贯的样子作答。（原量表 120 题，去掉了 4 道美国政治倾向题。）" };
+const ACTION_DEF = { id: "action", name: "行动与创业特质", min: 1, max: 5, labels: IPIP50.labels,
+  source: "IPIP 中对应 TCI、VIA、JPI-R 的五个量表：行动启动、坚持、冒险、创新、好奇心", license: "公有领域，可以用于任何目的",
+  intro: "这一部分看你「把事情做起来」的方式：能不能马上开始，能不能坚持，敢不敢冒险，有没有新点子，对世界有多好奇。" };
 const LIKERT = [
-  { def: IPIP50, text: it => it[0], count: 50 },
-  { def: ONET, text: it => it, count: 60 },
-  { def: MOOD, text: it => it, count: 16 }
+  { def: IPIP50, texts: () => IPIP50.items.map(it => it[0]) },
+  { def: NEO_DEF, texts: () => NEO120.map(it => it[1]), keys: () => NEO120.map(it => it[0]) },
+  { def: ACTION_DEF, texts: () => ACTION.map(it => it[0]) },
+  { def: ONET, texts: () => ONET.items },
+  { def: MOOD, texts: () => MOOD.items }
 ];
 function modules() {
   const list = [
-    { id: "ipip50", name: IPIP50.name, minutes: IPIP50.minutes, total: 50, kind: "likert" },
+    { id: "ipip50", name: "大五人格 · 快速版", minutes: IPIP50.minutes, total: 50, kind: "likert", note: "可以邀请朋友评价你" },
+    { id: "neo120", name: NEO_DEF.name, minutes: 15, total: NEO120.length, kind: "likert", note: "29 个分面" },
+    { id: "action", name: ACTION_DEF.name, minutes: 6, total: ACTION.length, kind: "likert" },
     { id: "onet", name: ONET.name, minutes: ONET.minutes, total: 60, kind: "likert" },
-    { id: "values", name: WORKVALUES.name, minutes: WORKVALUES.minutes, total: 6, kind: "rank" },
+    { id: "wil", name: "工作价值", minutes: 5, total: WIL.length, kind: "cards" },
     { id: "interview", name: INTERVIEW.name, minutes: INTERVIEW.minutes, total: INTERVIEW.groups.reduce((n, g) => n + g[1].length, 0), kind: "open" },
     { id: "mood", name: MOOD.name, minutes: MOOD.minutes, total: 16, kind: "likert", optional: true }
   ];
@@ -82,13 +93,13 @@ function renderAboutInline() { main.replaceChildren(); renderAbout(true); }
 function renderHome() {
   main.append(
     el("h1", {}, "了解你自己，再决定往哪走"),
-    el("p", { class: "lead" }, "基于公开的学术测评工具：大五人格（可以邀请朋友评价你）、职业兴趣、工作价值，加上一份自我访谈。全部做完大约 35 分钟，可以分几次完成，进度会自动保存在本机。")
+    el("p", { class: "lead" }, "基于公开的学术测评工具：大五人格（快速版可以邀请朋友评价你，深度版有 29 个分面）、行动与创业特质、职业兴趣、工作价值，加上一份自我访谈。全部做完大约 70 分钟，可以分几次完成，进度会自动保存在本机。时间不够的话，先做快速版、职业兴趣和工作价值。")
   );
   const cards = el("div", { class: "cards" });
   for (const m of modules()) {
     const n = Math.min(answered(m), m.total);
     cards.append(el("div", { class: "card" },
-      el("div", {}, el("b", {}, m.name), el("small", {}, `${m.total} 题 · 约 ${m.minutes} 分钟${m.optional ? " · 可选" : ""}`)),
+      el("div", {}, el("b", {}, m.name), el("small", {}, `${m.total} ${m.kind === "cards" ? "张卡片" : "题"} · 约 ${m.minutes} 分钟${m.note ? " · " + m.note : ""}${m.optional ? " · 可选" : ""}`)),
       el("span", { class: "pill" + (n === m.total ? " full" : "") }, `${n}/${m.total}`),
       el("button", { class: "btn" + (n ? " ghost" : ""), type: "button", onclick: () => go("module", m.id) }, n === m.total ? "查看" : n ? "继续" : "开始")
     ));
@@ -101,14 +112,14 @@ function renderHome() {
 }
 
 // ---------- 作答页 ----------
-function likertBlock(id, def, texts, onChange) {
+function likertBlock(id, def, texts, onChange, keys) {
   const frag = document.createDocumentFragment();
   const lg = el("div", { class: "legend" });
   def.labels.forEach((l, i) => lg.append(el("span", {}, el("b", {}, def.min + i), l)));
   frag.append(lg);
   texts.forEach((t, i) => {
-    const k = i + 1, a = ans(id);
-    const it = el("div", { class: "item" + (a[k] != null ? " ok" : "") }, el("div", { class: "q" }, el("span", { class: "no" }, String(k).padStart(2, "0")), el("span", {}, t)));
+    const k = keys ? keys[i] : i + 1, a = ans(id);
+    const it = el("div", { class: "item" + (a[k] != null ? " ok" : "") }, el("div", { class: "q" }, el("span", { class: "no" }, String(i + 1).padStart(2, "0")), el("span", {}, t)));
     const sc = el("div", { class: "scale" });
     for (let v = def.min; v <= def.max; v++) {
       sc.append(el("button", { type: "button", class: a[k] === v ? "sel" : "", title: def.labels[v - def.min], "aria-label": `${k}：${def.labels[v - def.min]}`,
@@ -123,15 +134,21 @@ function head(def) {
 }
 function renderModule(id) {
   const back = el("div", { class: "btns" }, el("button", { class: "btn", type: "button", onclick: () => go("home") }, "保存并返回"), el("button", { class: "btn ghost", type: "button", onclick: () => go("report") }, "查看报告"));
-  if (id === "values") {
-    main.append(...head(WORKVALUES));
-    const box = el("div", { class: "rank" }), warn = el("div", { class: "msg warn" }), a = ans("values");
-    const check = () => { const v = Object.values(a).filter(Boolean); warn.textContent = new Set(v).size < v.length ? "有重复的排名，每个数字只能用一次。" : ""; };
-    WORKVALUES.items.forEach(([n, d], i) => {
-      const sel = el("select", { "aria-label": n + " 的排名", onchange: e => { a[i + 1] = e.target.value ? Number(e.target.value) : null; save(); check(); } }, el("option", { value: "" }, "—"), ...[1, 2, 3, 4, 5, 6].map(x => el("option", { value: x, selected: a[i + 1] === x }, x)));
-      box.append(el("div", { class: "r" }, sel, el("div", {}, el("b", {}, n), el("small", {}, d))));
+  if (id === "wil") {
+    main.append(el("h1", {}, "工作价值"), el("p", { class: "src" }, "来源：改编自 O*NET Work Importance Locator（USDOL/ETA）　条款：按 O*NET Tools Developer License 改编"),
+      el("p", { class: "lead" }, "下面 20 张卡片，每张都以「在我理想的工作中，重要的是……」开头。请按重要程度把它们分到 5 档：5 表示最重要，1 表示最不重要。每一档必须正好放 4 张，所以你需要取舍。"));
+    const a = ans("wil"), status = el("div", { class: "note" });
+    const upd = () => { const c = [0, 0, 0, 0, 0, 0]; Object.values(a).forEach(v => c[v]++); status.replaceChildren(...[5, 4, 3, 2, 1].map(n => el("span", { style: "margin-right:14px;font-family:var(--f-mono);" + (c[n] > 4 ? "color:var(--warn)" : c[n] === 4 ? "color:var(--done)" : "") }, `第${n}档 ${c[n]}/4`)), el("div", { class: "msg" }, Object.values(c).some(x => x > 4) ? "有一档超过 4 张了，请把多出来的挪到别的档。" : "")); };
+    const legend = ["", "最不重要", "不太重要", "一般", "比较重要", "最重要"];
+    main.append(status);
+    WIL.forEach(([c, t]) => {
+      const it = el("div", { class: "item" + (a[c] ? " ok" : "") }, el("div", { class: "q" }, el("span", { class: "no" }, c), el("span", {}, "在我理想的工作中，重要的是：" + t)));
+      const sc = el("div", { class: "scale" });
+      for (const v of [5, 4, 3, 2, 1]) sc.append(el("button", { type: "button", class: a[c] === v ? "sel" : "", title: legend[v], "aria-label": `${c}：第${v}档，${legend[v]}`,
+        onclick: e => { a[c] = v; save(); sc.querySelectorAll("button").forEach(x => x.classList.remove("sel")); e.currentTarget.classList.add("sel"); it.classList.add("ok"); upd(); } }, v));
+      it.append(sc); main.append(it);
     });
-    check(); return main.append(box, warn, back);
+    upd(); return main.append(back);
   }
   if (id === "interview") {
     main.append(...head(INTERVIEW));
@@ -155,8 +172,8 @@ function renderModule(id) {
   main.append(...head(L.def));
   if (id === "mood") {
     const help = el("div", {}); const upd = () => { help.replaceChildren(ans("mood")[9] > 0 ? crisisBox() : ""); };
-    main.append(likertBlock(id, L.def, L.def.items.map(L.text), k => { if (k === 9) upd(); }), help); upd();
-  } else main.append(likertBlock(id, L.def, L.def.items.map(L.text)));
+    main.append(likertBlock(id, L.def, L.texts(), k => { if (k === 9) upd(); }), help); upd();
+  } else main.append(likertBlock(id, L.def, L.texts(), null, L.keys?.()));
   main.append(back);
 }
 function crisisBox() {
@@ -210,6 +227,24 @@ function renderReport() {
       el("td", {}, el("button", { class: "btn ghost", type: "button", onclick: () => { S.observers.splice(i, 1); save(); go("report"); } }, "删除")))));
     main.append(el("div", { class: "tbl" }, t));
   }
+  // 深度版
+  const neo = scoreNEO(ans("neo120"));
+  if (Object.values(neo.facets).some(v => v != null)) {
+    main.append(el("h2", {}, "大五人格 · 深度版"), el("p", { class: "src" }, NEO_DEF.source));
+    if (Object.values(neo.domains).some(v => v != null)) main.append(barRows(Object.entries(NEO_DOMAINS).map(([d, n]) => ({ label: n.replace(/（.*）/, ""), value: neo.domains[d], note: NEO_DOMAIN_NOTES[d] })), 5));
+    for (const [d, n] of Object.entries(NEO_DOMAINS)) {
+      const rows = Object.entries(NEO_FACETS).filter(([k]) => k[0] === d).map(([k, fn]) => ({ label: fn, value: neo.facets[k] }));
+      if (rows.some(r => r.value != null)) main.append(el("h3", {}, n), barRows(rows, 5));
+    }
+    const fs = Object.entries(neo.facets).filter(([, v]) => v != null).sort((a, b) => b[1] - a[1]);
+    if (fs.length >= 10) main.append(el("div", { class: "note" }, `你最突出的分面：${fs.slice(0, 3).map(([k, v]) => NEO_FACETS[k] + " " + v).join("、")}；最低的分面：${fs.slice(-3).reverse().map(([k, v]) => NEO_FACETS[k] + " " + v).join("、")}。注意「神经质」下面的分面，分数越高表示越容易出现这种情绪。`));
+  }
+  const act = scoreAction(ans("action"));
+  if (Object.values(act).some(v => v != null)) {
+    main.append(el("h2", {}, "行动与创业特质"), el("p", { class: "src" }, ACTION_DEF.source),
+      barRows(Object.entries(ACTION_SCALES).map(([k, [n, , note]]) => ({ label: n, value: act[k], note })), 5));
+    if (act.init != null && act.init < 3 && act.pers != null && act.pers >= 3) main.append(el("div", { class: "note" }, "你的「坚持」不低，但「行动启动」偏低：一旦开始就能做下去，难的是开始那一下。给自己设定外部截止日期、把第一步拆得足够小，往往比逼自己坚持更有效。"));
+  }
   // 职业兴趣
   const on = scoreONET(ans("onet"));
   main.append(el("h2", {}, "职业兴趣"), el("p", { class: "src" }, ONET.source));
@@ -219,10 +254,13 @@ function renderReport() {
     main.append(el("div", { class: "note" }, `你的兴趣代码：${on.code}。${on.spread < 10 ? "你各类兴趣的分数很接近（最高和最低只差 " + on.spread + " 分），说明兴趣分化程度比较低。这类人往往觉得什么都能做，但选方向时容易犹豫，可以结合下面的自我访谈，看看实际让你投入的是哪类事。" : "最高的三类就是你最可能感到投入的工作类型。"}`));
   }
   // 工作价值
-  const wv = scoreValues(ans("values"));
-  main.append(el("h2", {}, "工作价值排序"));
-  if (!wv) main.append(el("p", { class: "msg" }, "还没有完成，或者排名有重复。"));
-  else main.append(el("ol", {}, ...wv.map(v => el("li", {}, el("b", {}, v.name), "：", v.desc))), el("p", { class: "lead" }, "排在前两位的，就是你选择工作或生意时最不该牺牲的东西。"));
+  const wil = scoreWIL(ans("wil"));
+  main.append(el("h2", {}, "工作价值"), el("p", { class: "src" }, "改编自 O*NET Work Importance Locator"));
+  if (!wil.ok) main.append(el("p", { class: "msg" }, "还没有完成，或者有的档不是正好 4 张卡片。"));
+  else {
+    main.append(barRows(wil.ranked.map(([k, v]) => ({ label: WIL_VALUES[k][0], value: v, note: WIL_VALUES[k][2] })), 30, 6));
+    main.append(el("p", { class: "lead" }, `排在前两位的「${WIL_VALUES[wil.ranked[0][0]][0]}」和「${WIL_VALUES[wil.ranked[1][0]][0]}」，是你选择工作或生意时最不该牺牲的东西。分数范围是 6 到 30 分。`));
+  }
   // 自定义题库
   for (const c of S.custom) {
     const r = scoreCustom(c, ans("c:" + c.id));
@@ -323,9 +361,9 @@ function renderData() {
 // ---------- 声明 ----------
 function renderAbout(fromConsent) {
   main.append(el("h1", {}, "声明"), html(ABOUT));
-  const t = el("table", {}, el("tr", {}, el("th", {}, "量表"), el("th", {}, "作者"), el("th", {}, "状态")));
-  PENDING.forEach(([n, a, s]) => t.append(el("tr", {}, el("td", {}, n), el("td", {}, a), el("td", {}, s))));
-  main.append(el("h2", {}, "暂未收录的量表"), el("p", { class: "lead" }, "下面这些量表质量很好，但原作者没有允许公开分发，所以本项目不收录。我们正在联系作者申请授权。"), el("div", { class: "tbl" }, t));
+  const t = el("table", {}, el("tr", {}, el("th", {}, "量表"), el("th", {}, "作者"), el("th", {}, "状态"), el("th", {}, "本工具里的替代")));
+  PENDING.forEach(([n, a, st, alt]) => t.append(el("tr", {}, el("td", {}, n), el("td", {}, a), el("td", {}, st), el("td", {}, alt))));
+  main.append(el("h2", {}, "未收录的量表"), el("p", { class: "lead" }, "下面这些量表质量很好，但原作者没有允许公开分发，所以本项目不收录，而是用公有领域的同类量表替代。我们也在联系作者申请授权。"), el("div", { class: "tbl" }, t));
   if (fromConsent === true) main.append(el("div", { class: "btns" }, el("button", { class: "btn", type: "button", onclick: () => go("home") }, "返回")));
 }
 const ABOUT = `<div class="prose">
@@ -347,9 +385,9 @@ const ABOUT = `<div class="prose">
 </ul>
 <h2>题目来源与条款</h2>
 <ul>
-<li><b>大五人格：</b>IPIP Big-Five Factor Markers（Goldberg, 1992），来自 International Personality Item Pool（ipip.ori.org），属于公有领域。中文为本项目翻译。</li>
+<li><b>大五人格 · 快速版：</b>IPIP Big-Five Factor Markers（Goldberg, 1992）。<b>深度版：</b>IPIP-NEO-120（Johnson, 2014），去掉了 4 道美国政治倾向题。<b>行动与创业特质：</b>IPIP 中对应 TCI（行动启动）、VIA（坚持、创新、好奇心）、JPI-R（冒险）的量表。以上均来自 International Personality Item Pool（ipip.ori.org），属于公有领域，中文为本项目翻译。</li>
 <li><b>职业兴趣：</b>改编自 O*NET Interest Profiler Short Form。本项目依据 O*NET Tools Developer License 进行了中文翻译和本地化改写。来源：O*NET Career Exploration Tools，美国劳工部就业与培训管理局（USDOL/ETA）。USDOL/ETA 没有审核、批准或认可这些改动。O*NET 是 USDOL/ETA 的商标。</li>
-<li><b>工作价值：</b>分类参考 O*NET Work Importance Locator，文字说明为原创。</li>
+<li><b>工作价值：</b>改编自 O*NET Work Importance Locator（20 张卡片、6 类工作价值，计分规则沿用原版），依据 O*NET Tools Developer License 翻译和改编。</li>
 <li><b>情绪状态：</b>PHQ-9 和 GAD-7，由 Spitzer、Williams、Kroenke 等编制。原作者声明，复制、翻译、展示和分发无需许可。</li>
 <li><b>自我访谈：</b>参考 McAdams 人生故事访谈与 Savickas 生涯建构访谈的思路，题目原创。</li>
 <li>所有中文翻译都没有经过正式的回译和常模研究，结果仅供参考。</li>

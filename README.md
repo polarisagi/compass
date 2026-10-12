@@ -6,10 +6,12 @@
 
 | 模块 | 题数 | 用时 | 来源 |
 |---|---|---|---|
-| 大五人格 | 50 | 约 6 分钟 | IPIP Big-Five Factor Markers（公有领域） |
+| 大五人格 · 快速版 | 50 | 约 6 分钟 | IPIP Big-Five Factor Markers（公有领域） |
 | 朋友他评 | 50 | 约 6 分钟（朋友来做） | 同上，他评版本 |
+| 大五人格 · 深度版 | 116 | 约 15 分钟 | IPIP-NEO-120（公有领域），29 个分面 |
+| 行动与创业特质 | 46 | 约 6 分钟 | IPIP 行动启动、坚持、冒险、创新、好奇心（公有领域） |
 | 职业兴趣（RIASEC） | 60 | 约 8 分钟 | 改编自 O\*NET Interest Profiler Short Form |
-| 工作价值排序 | 6 | 约 2 分钟 | 分类参考 O\*NET，文字为原创 |
+| 工作价值 | 20 张卡片 | 约 5 分钟 | 改编自 O\*NET Work Importance Locator |
 | 自我访谈 | 14 | 约 15 分钟 | 原创 |
 | 情绪状态（可选） | 16 | 约 3 分钟 | PHQ-9 + GAD-7 |
 | 导入你自己的题库 | — | — | 用户自行提供，见 [题库格式](docs/题库格式.md) |
@@ -34,7 +36,8 @@ python3 -m http.server 8000   # 然后打开 http://localhost:8000
 ```text
 index.html          页面入口
 css/style.css       样式（浅色和深色模式）
-js/instruments.js   内置题库（每个模块都注明了来源和条款）
+js/instruments.js   内置题库：快速版、职业兴趣、情绪、访谈（注明来源和条款）
+js/deep.js          内置题库：深度版、行动与创业特质、工作价值卡片
 js/scoring.js       计分（纯函数）
 js/custom.js        自行导入题库的校验和计分
 js/app.js           页面逻辑
